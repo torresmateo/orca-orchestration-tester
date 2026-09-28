@@ -73,10 +73,15 @@ describeDb("POST /api/links with expires_at", () => {
     expect(await storedExpiry(body.slug)).toBeNull();
   });
 
-  test("an explicit null is the same as leaving it out", async () => {
+  test("an explicit null is the same as leaving it out: 201, null, never expires (D10)", async () => {
     const body = await create({ expires_at: null });
     expect(body).toHaveProperty("expires_at", null);
     expect(await storedExpiry(body.slug)).toBeNull();
+
+    await db()`update links set created_at = now() - interval '100 years' where slug = ${body.slug}`;
+    const res = await app().fetch(request(`/${body.slug}`));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://example.com/x");
   });
 
   test("rejects an expires_at already in the past with 400 and stores nothing", async () => {
