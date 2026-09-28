@@ -20,7 +20,9 @@ test("GET /healthz reports 503 when the database is down", async () => {
 });
 
 test("unknown routes are 404", async () => {
+  // A multi-segment path: a single segment is a slug lookup and needs the DB.
   const dead = connect("postgres://nobody:nobody@127.0.0.1:1/none");
-  const res = await createApp(dead).fetch(request("/nope"));
+  const res = await createApp(dead).fetch(request("/no/such/route"));
   expect(res.status).toBe(404);
+  expect(await res.json()).toEqual({ error: "not_found" });
 });
