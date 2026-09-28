@@ -26,7 +26,13 @@ function slugsFrom(...slugs: string[]): () => string {
   };
 }
 
-type LinkBody = { slug: string; url: string; short_url: string; created_at: string };
+type LinkBody = {
+  slug: string;
+  url: string;
+  short_url: string;
+  created_at: string;
+  expires_at: string | null;
+};
 
 async function linkBody(res: Response): Promise<LinkBody> {
   return (await res.json()) as LinkBody;
@@ -40,13 +46,19 @@ async function linkCount(): Promise<number> {
 describeDb("POST /api/links", () => {
   beforeEach(resetDb);
 
-  test("creates a link and returns exactly slug, url, short_url, created_at", async () => {
+  test("creates a link and returns exactly slug, url, short_url, created_at, expires_at", async () => {
     const before = Date.now();
     const res = await app().fetch(postUrl("https://example.com/a?b=1"));
     expect(res.status).toBe(201);
 
     const body = await linkBody(res);
-    expect(Object.keys(body).sort()).toEqual(["created_at", "short_url", "slug", "url"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "created_at",
+      "expires_at",
+      "short_url",
+      "slug",
+      "url",
+    ]);
     expect(body.slug).toMatch(SLUG);
     expect(body.url).toBe("https://example.com/a?b=1");
     expect(body.short_url).toBe(`http://snip.test/${body.slug}`);
