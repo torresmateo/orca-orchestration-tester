@@ -24,8 +24,15 @@ and quietly skips every database test.
 
 ## API
 
-See [`DESIGN.md`](DESIGN.md) §Contracts. Today only `GET /healthz` exists; the
-rest arrives slice by slice.
+See [`DESIGN.md`](DESIGN.md) §Contracts. The rest arrives slice by slice.
+
+Every `/api/*` request needs an API key; without a valid one it gets `401`
+`{"error":"unauthorized"}`. `GET /healthz` and `GET /<slug>` stay public.
+
+```sh
+KEY=$(bun run keys:create my-laptop)   # prints the key once; only its hash is stored
+curl -H "Authorization: Bearer $KEY" localhost:$(grep ^PORT_WEB .env.local | cut -d= -f2)/api/...
+```
 
 ## Orchestration
 
