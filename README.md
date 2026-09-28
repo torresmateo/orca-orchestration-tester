@@ -24,8 +24,21 @@ and quietly skips every database test.
 
 ## API
 
-See [`DESIGN.md`](DESIGN.md) §Contracts. Today only `GET /healthz` exists; the
-rest arrives slice by slice.
+See [`DESIGN.md`](DESIGN.md) §Contracts. Endpoints arrive slice by slice; today
+there are:
+
+- `GET /healthz`: database liveness
+- `POST /api/links` with `{"url": "https://..."}` → `201`
+  `{"slug", "url", "short_url", "created_at"}`
+- `GET /<slug>` → `302` to the link's URL, or `404 {"error":"not_found"}`
+
+```sh
+PORT_WEB=$(grep ^PORT_WEB .env.local | cut -d= -f2)
+curl -si -X POST localhost:$PORT_WEB/api/links -d '{"url":"https://example.com"}'
+# HTTP/1.1 201 Created ... {"slug":"aB3dE9x","url":"https://example.com",...}
+curl -si localhost:$PORT_WEB/aB3dE9x
+# HTTP/1.1 302 Found ... Location: https://example.com
+```
 
 ## Orchestration
 
