@@ -1,0 +1,23 @@
+# Dev and test database. Compose does NOT read .env.local on its own:
+#   docker compose --env-file .env.local up -d --wait db
+# (or `bun run db:up`). Without --env-file, PORT_DB is unset and this fails
+# loudly on purpose rather than falling back to a port another worktree owns.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: snip
+      POSTGRES_PASSWORD: snip
+      POSTGRES_DB: snip
+    ports:
+      - "127.0.0.1:${PORT_DB:?PORT_DB is unset; pass --env-file .env.local}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U snip -d snip"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

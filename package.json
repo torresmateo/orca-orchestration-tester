@@ -1,0 +1,19 @@
+{
+  "name": "snip",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "db:up": "docker compose --env-file .env.local up -d --wait db",
+    "db:down": "docker compose --env-file .env.local down -v",
+    "migrate": "bun --env-file=.env.local src/migrate.ts",
+    "dev": "bun --env-file=.env.local --watch src/server.ts",
+    "start": "bun --env-file=.env.local src/server.ts",
+    "test": "bun --env-file=.env.local test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3"
+  }
+}
