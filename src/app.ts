@@ -1,4 +1,5 @@
 import { ping, type Db } from "./db";
+import { authenticate } from "./keys";
 import { generateSlug, RESERVED_SLUGS } from "./slug";
 
 // The whole HTTP surface. Tests call `app.fetch(new Request(...))` directly,
@@ -104,6 +105,19 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
       if (req.method === "GET" && url.pathname === "/healthz") {
         const up = await ping(sql);
         return json({ ok: up, db: up ? "up" : "down" }, up ? 200 : 503);
+      }
+
+      // The one auth check (DESIGN D5). It guards the whole prefix, so an
+      // /api/* route added below is protected without its author opting in,
+      // and an unknown /api/* path is 401 before it can be 404.
+      if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
+        const key = await authenticate(sql, req);
+        if (!key) {
+          return Response.json(
+            { error: "unauthorized" },
+            { status: 401, headers: { "WWW-Authenticate": "Bearer" } },
+          );
+        }
       }
 
       if (req.method === "POST" && url.pathname === "/api/links") {

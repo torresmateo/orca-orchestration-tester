@@ -32,9 +32,14 @@ there are:
   `{"slug", "url", "short_url", "created_at"}`
 - `GET /<slug>` → `302` to the link's URL, or `404 {"error":"not_found"}`
 
+Every `/api/*` request needs an API key; without a valid one it gets `401`
+`{"error":"unauthorized"}`. `GET /healthz` and `GET /<slug>` stay public.
+
 ```sh
+KEY=$(bun run keys:create my-laptop)   # prints the key once; only its hash is stored
 PORT_WEB=$(grep ^PORT_WEB .env.local | cut -d= -f2)
-curl -si -X POST localhost:$PORT_WEB/api/links -d '{"url":"https://example.com"}'
+curl -si -X POST localhost:$PORT_WEB/api/links -H "Authorization: Bearer $KEY" \
+  -d '{"url":"https://example.com"}'
 # HTTP/1.1 201 Created ... {"slug":"aB3dE9x","url":"https://example.com",...}
 curl -si localhost:$PORT_WEB/aB3dE9x
 # HTTP/1.1 302 Found ... Location: https://example.com

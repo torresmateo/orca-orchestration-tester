@@ -7,6 +7,7 @@
     "db:up": "docker compose --env-file .env.local up -d --wait db",
     "db:down": "docker compose --env-file .env.local down -v",
     "migrate": "bun --env-file=.env.local src/migrate.ts",
+    "keys:create": "bun --env-file=.env.local src/keys-create.ts",
     "dev": "bun --env-file=.env.local --watch src/server.ts",
     "start": "bun --env-file=.env.local src/server.ts",
     "test": "bun --env-file=.env.local test",
