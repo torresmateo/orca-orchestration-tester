@@ -4,12 +4,20 @@ import { app, createTestKey, db, describeDb, request, resetDb, withKey } from ".
 
 // Every /api/* route that exists, plus paths no route handles. The guard is a
 // prefix check (DESIGN D5), so the unknown paths must be refused exactly like
-// the real ones. Add each new /api/* route here.
-const API_ROUTES: Array<[method: string, path: string]> = [
-  ["GET", "/api/nope"],
-  ["POST", "/api/nope"],
-  ["GET", "/api"],
+// the real ones. Add each new /api/* route here, with a body a valid caller
+// would send and the status that caller gets.
+type ApiRoute = { method: string; path: string; body?: string; okStatus: number };
+const API_ROUTES: ApiRoute[] = [
+  { method: "POST", path: "/api/links", body: '{"url":"https://example.com"}', okStatus: 201 },
+  { method: "GET", path: "/api/nope", okStatus: 404 },
+  { method: "POST", path: "/api/nope", okStatus: 404 },
+  { method: "GET", path: "/api", okStatus: 404 },
 ];
+
+async function linkCount(): Promise<number> {
+  const [row] = await db()`select count(*)::int as n from links`;
+  return row.n;
+}
 
 // Independent of src/keys.ts, so the stored hash is checked against SHA-256
 // itself rather than against the code under test.
@@ -44,21 +52,24 @@ describeDb("API key auth on /api/*", () => {
     ["valid key with trailing junk", () => `Bearer ${valid} extra`],
   ];
 
-  for (const [method, path] of API_ROUTES) {
+  for (const { method, path, body, okStatus } of API_ROUTES) {
     for (const [label, header] of badAuth) {
+      // Sends the same well-formed body a valid caller would, so the 401 comes
+      // from the key and nothing else. A refused request writes nothing.
       test(`${method} ${path} with ${label} is 401 unauthorized`, async () => {
         const h = header();
         const res = await app().fetch(
-          request(path, { method, headers: h === undefined ? {} : { authorization: h } }),
+          request(path, { method, body, headers: h === undefined ? {} : { authorization: h } }),
         );
         expect(res.status).toBe(401);
         expect(await res.json()).toEqual({ error: "unauthorized" });
+        expect(await linkCount()).toBe(0);
       });
     }
 
-    test(`${method} ${path} with a valid key is not 401`, async () => {
-      const res = await app().fetch(request(path, withKey(valid, { method })));
-      expect(res.status).not.toBe(401);
+    test(`${method} ${path} with a valid key is ${okStatus}`, async () => {
+      const res = await app().fetch(request(path, withKey(valid, { method, body })));
+      expect(res.status).toBe(okStatus);
     });
   }
 
@@ -94,8 +105,22 @@ describeDb("API key auth on /api/*", () => {
     }
   });
 
-  test("GET /<slug> is public: no header reaches slug routing, not the guard", async () => {
-    // No links exist on this branch, so a public slug lookup is 404, never 401.
+  test("GET /<slug> is public: a link created with a key redirects with no header", async () => {
+    const created = await app().fetch(
+      request(
+        "/api/links",
+        withKey(valid, { method: "POST", body: '{"url":"https://example.com/x"}' }),
+      ),
+    );
+    expect(created.status).toBe(201);
+    const { slug } = (await created.json()) as { slug: string };
+
+    const res = await app().fetch(request(`/${slug}`));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://example.com/x");
+  });
+
+  test("GET /<slug> is public: an unknown slug is 404 with no header, never 401", async () => {
     for (const path of ["/abc1234", "/apix", "/API/nope"]) {
       const res = await app().fetch(request(path));
       expect(res.status).toBe(404);
