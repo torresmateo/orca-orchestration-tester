@@ -1,13 +1,21 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { app, db, describeDb, request, resetDb } from "./helpers";
+import { app, createTestKey, db, describeDb, request, resetDb, withKey } from "./helpers";
 
 type Stats = { slug: string; total_clicks: number; last_clicked_at: string | null };
 
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
+// /api/* needs a key (D5); GET /<slug> does not, so follow() never sends one.
+let key: string;
+
+async function resetWithKey(): Promise<void> {
+  await resetDb();
+  key = (await createTestKey()).key;
+}
+
 async function create(url = "https://example.com"): Promise<string> {
   const res = await app().fetch(
-    new Request("http://snip.test/api/links", { method: "POST", body: JSON.stringify({ url }) }),
+    request("/api/links", withKey(key, { method: "POST", body: JSON.stringify({ url }) })),
   );
   expect(res.status).toBe(201);
   return ((await res.json()) as { slug: string }).slug;
@@ -18,7 +26,7 @@ async function follow(slug: string): Promise<Response> {
 }
 
 async function stats(slug: string): Promise<Response> {
-  return app().fetch(request(`/api/links/${slug}/stats`));
+  return app().fetch(request(`/api/links/${slug}/stats`, withKey(key)));
 }
 
 async function clickCount(): Promise<number> {
@@ -27,7 +35,7 @@ async function clickCount(): Promise<number> {
 }
 
 describeDb("click recording", () => {
-  beforeEach(resetDb);
+  beforeEach(resetWithKey);
 
   test("following a link 5 times reads back total_clicks 5", async () => {
     const slug = await create();
@@ -112,6 +120,34 @@ describeDb("click recording", () => {
     expect(await clickCount()).toBe(0);
   });
 
+  test("following a link needs no key and still records the click", async () => {
+    const slug = await create();
+    const req = request(`/${slug}`);
+    expect(req.headers.has("authorization")).toBe(false);
+
+    const res = await app().fetch(req);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://example.com");
+    expect(((await (await stats(slug)).json()) as Stats).total_clicks).toBe(1);
+  });
+
+  test("stats without a valid key are 401 unauthorized", async () => {
+    const slug = await create();
+    await follow(slug);
+
+    const noKey = await app().fetch(request(`/api/links/${slug}/stats`));
+    expect(noKey.status).toBe(401);
+    expect(await noKey.json()).toEqual({ error: "unauthorized" });
+
+    const randomKey = `snip_${crypto.randomUUID().replaceAll("-", "")}`;
+    const wrongKey = await app().fetch(request(`/api/links/${slug}/stats`, withKey(randomKey)));
+    expect(wrongKey.status).toBe(401);
+    expect(await wrongKey.json()).toEqual({ error: "unauthorized" });
+
+    // The same link with the real key: the 401s were auth, not a missing link.
+    expect(((await (await stats(slug)).json()) as Stats).total_clicks).toBe(1);
+  });
+
   test("deleting a link deletes its clicks", async () => {
     const slug = await create();
     await follow(slug);
@@ -121,7 +157,7 @@ describeDb("click recording", () => {
 });
 
 describeDb("click recording failure (D4)", () => {
-  beforeEach(resetDb);
+  beforeEach(resetWithKey);
 
   // The test hides the clicks table; put it back even if an assertion fails,
   // or every later suite in this database breaks.
