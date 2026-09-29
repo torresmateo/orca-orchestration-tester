@@ -9,6 +9,8 @@ import { app, createTestKey, db, describeDb, request, resetDb, withKey } from ".
 type ApiRoute = { method: string; path: string; body?: string; okStatus: number };
 const API_ROUTES: ApiRoute[] = [
   { method: "POST", path: "/api/links", body: '{"url":"https://example.com"}', okStatus: 201 },
+  { method: "GET", path: "/api/links", okStatus: 200 },
+  { method: "GET", path: "/api/links?limit=5", okStatus: 200 },
   { method: "GET", path: "/api/nope", okStatus: 404 },
   { method: "POST", path: "/api/nope", okStatus: 404 },
   { method: "GET", path: "/api", okStatus: 404 },
