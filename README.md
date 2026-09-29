@@ -30,10 +30,17 @@ there are:
 - `GET /healthz`: database liveness
 - `POST /api/links` with `{"url": "https://..."}` → `201`
   `{"slug", "url", "short_url", "created_at"}`
+- `GET /api/links` → `200 {"links":[...],"next_cursor": string|null}`: the
+  calling key's links, newest first, each shaped like the `POST` response.
+  `?limit=` 1-100 (default 20); pass `?cursor=<next_cursor>` for the next
+  page. `next_cursor` is `null` on the last page.
 - `GET /<slug>` → `302` to the link's URL, or `404 {"error":"not_found"}`
 
 Every `/api/*` request needs an API key; without a valid one it gets `401`
 `{"error":"unauthorized"}`. `GET /healthz` and `GET /<slug>` stay public.
+A link belongs to the key that created it: other keys never see it through
+`/api`, and asking about it gets `404`, as if it did not exist. Anyone can
+follow its short URL.
 
 ```sh
 KEY=$(bun run keys:create my-laptop)   # prints the key once; only its hash is stored
@@ -43,6 +50,8 @@ curl -si -X POST localhost:$PORT_WEB/api/links -H "Authorization: Bearer $KEY" \
 # HTTP/1.1 201 Created ... {"slug":"aB3dE9x","url":"https://example.com",...}
 curl -si localhost:$PORT_WEB/aB3dE9x
 # HTTP/1.1 302 Found ... Location: https://example.com
+curl -s "localhost:$PORT_WEB/api/links?limit=2" -H "Authorization: Bearer $KEY"
+# {"links":[{"slug":"aB3dE9x","url":"https://example.com",...}],"next_cursor":null}
 ```
 
 ## Orchestration
