@@ -1,18 +1,28 @@
 import { beforeEach, expect, test } from "bun:test";
-import { app, db, describeDb, request, resetDb } from "./helpers";
+import { app, createTestKey, db, describeDb, request, resetDb, withKey } from "./helpers";
 
-function post(body: unknown): Request {
-  return new Request("http://snip.test/api/links", {
+// /api/* requires a key (D5). Each test empties the database and creates a
+// fresh key, so no test relies on another's key.
+let key: string;
+
+async function resetWithKey(): Promise<void> {
+  await resetDb();
+  key = (await createTestKey()).key;
+}
+
+function post(body: unknown, authed = true): Request {
+  const init: RequestInit = {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
-  });
+  };
+  return new Request("http://snip.test/api/links", authed ? withKey(key, init) : init);
 }
 
 type LinkBody = { slug: string; url: string; short_url: string; created_at: string };
 
-async function create(body: unknown): Promise<Response> {
-  return app().fetch(post(body));
+async function create(body: unknown, authed = true): Promise<Response> {
+  return app().fetch(post(body, authed));
 }
 
 async function storedLinks(): Promise<[string, string][]> {
@@ -21,7 +31,7 @@ async function storedLinks(): Promise<[string, string][]> {
 }
 
 describeDb("POST /api/links with a custom slug", () => {
-  beforeEach(resetDb);
+  beforeEach(resetWithKey);
 
   test("stores and returns the slug as given, and it redirects", async () => {
     const res = await create({ url: "https://example.com", slug: "my-Link_1" });
@@ -149,6 +159,19 @@ describeDb("POST /api/links with a custom slug", () => {
     await create({ url: "https://example.com", slug: "api" });
     const health = await app().fetch(request("/healthz"));
     expect(await health.json()).toEqual({ ok: true, db: "up" });
-    expect((await app().fetch(request("/api"))).status).toBe(404);
+    expect((await app().fetch(request("/api", withKey(key)))).status).toBe(404);
+  });
+
+  test("without a key, a custom slug is 401, stores nothing, and stays free", async () => {
+    const res = await create({ url: "https://example.com", slug: "my-Link_1" }, false);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toBe("Bearer");
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+    expect(await storedLinks()).toEqual([]);
+    expect((await app().fetch(request("/my-Link_1"))).status).toBe(404);
+
+    const retry = await create({ url: "https://example.com", slug: "my-Link_1" });
+    expect(retry.status).toBe(201);
+    expect(((await retry.json()) as LinkBody).slug).toBe("my-Link_1");
   });
 });
