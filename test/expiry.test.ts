@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { app, db, describeDb, request, resetDb } from "./helpers";
+import { app, createTestKey, db, describeDb, request, resetDb, withKey } from "./helpers";
 
 // Issue #5: optional expires_at on POST /api/links; 410 expired from GET /:slug
 // once it has passed. Expiry is judged by the database clock, so these tests
@@ -9,13 +9,25 @@ const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const HOUR = 3_600_000;
 
 type LinkBody = { slug: string; url: string; created_at: string; expires_at: string | null };
+type Stats = { slug: string; total_clicks: number; last_clicked_at: string | null };
+
+// /api/* needs a key (D5); GET /<slug> is public, so follows never send one.
+let key: string;
+
+async function resetWithKey(): Promise<void> {
+  await resetDb();
+  key = (await createTestKey()).key;
+}
 
 function post(body: unknown): Request {
-  return new Request("http://snip.test/api/links", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
+  return request(
+    "/api/links",
+    withKey(key, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    }),
+  );
 }
 
 async function create(body: Record<string, unknown>): Promise<LinkBody> {
@@ -34,8 +46,19 @@ async function linkCount(): Promise<number> {
   return row.n;
 }
 
+async function clickCount(): Promise<number> {
+  const [row] = await db()`select count(*)::int as n from clicks`;
+  return row.n;
+}
+
+async function stats(slug: string): Promise<Stats> {
+  const res = await app().fetch(request(`/api/links/${slug}/stats`, withKey(key)));
+  expect(res.status).toBe(200);
+  return (await res.json()) as Stats;
+}
+
 describeDb("POST /api/links with expires_at", () => {
-  beforeEach(resetDb);
+  beforeEach(resetWithKey);
 
   test("stores a future expires_at and echoes it as ISO-8601 UTC with Z (D8)", async () => {
     const expiresAt = new Date(Date.now() + 24 * HOUR).toISOString();
@@ -134,7 +157,7 @@ describeDb("POST /api/links with expires_at", () => {
 });
 
 describeDb("GET /:slug with expiry", () => {
-  beforeEach(resetDb);
+  beforeEach(resetWithKey);
 
   test("a link whose expires_at is in the future redirects 302", async () => {
     const { slug } = await create({ expires_at: new Date(Date.now() + HOUR).toISOString() });
@@ -184,6 +207,31 @@ describeDb("GET /:slug with expiry", () => {
     const res = await app().fetch(request(`/${slug}`));
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("https://example.com/x");
+  });
+
+  test("following an expired link records no click; stats keep only the earlier clicks (C3)", async () => {
+    const { slug } = await create({ expires_at: "2099-01-01T00:00:00Z" });
+    for (let i = 0; i < 2; i++) expect((await app().fetch(request(`/${slug}`))).status).toBe(302);
+    expect(await clickCount()).toBe(2);
+    const before = await stats(slug);
+    expect(before.total_clicks).toBe(2);
+    expect(before.last_clicked_at).not.toBeNull();
+
+    await db()`update links set expires_at = now() - interval '1 second' where slug = ${slug}`;
+
+    for (let i = 0; i < 3; i++) {
+      const res = await app().fetch(request(`/${slug}`));
+      expect(res.status).toBe(410);
+      expect(await res.json()).toEqual({ error: "expired" });
+    }
+    expect(await clickCount()).toBe(2);
+    const rows = await db()`select l.slug from clicks c join links l on l.id = c.link_id`;
+    expect(rows.map((r: { slug: string }) => r.slug)).toEqual([slug, slug]);
+    expect(await stats(slug)).toEqual({
+      slug,
+      total_clicks: 2,
+      last_clicked_at: before.last_clicked_at,
+    });
   });
 
   test("an unknown slug is still 404, not 410", async () => {

@@ -1,16 +1,28 @@
 import { beforeEach, expect, test } from "bun:test";
 import { createApp } from "../src/app";
 import { generateSlug } from "../src/slug";
-import { app, db, describeDb, request, resetDb } from "./helpers";
+import { app, createTestKey, db, describeDb, request, resetDb, withKey } from "./helpers";
 
 const SLUG = /^[A-Za-z0-9]{7}$/;
 
+// /api/* requires a key (D5). Each suite empties the database and creates a
+// fresh key before every test, so no test relies on another's key.
+let key: string;
+
+async function resetWithKey(): Promise<void> {
+  await resetDb();
+  key = (await createTestKey()).key;
+}
+
 function post(body: string, origin = "http://snip.test"): Request {
-  return new Request(`${origin}/api/links`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body,
-  });
+  return new Request(
+    `${origin}/api/links`,
+    withKey(key, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    }),
+  );
 }
 
 function postUrl(url: unknown): Request {
@@ -44,7 +56,7 @@ async function linkCount(): Promise<number> {
 }
 
 describeDb("POST /api/links", () => {
-  beforeEach(resetDb);
+  beforeEach(resetWithKey);
 
   test("creates a link and returns exactly slug, url, short_url, created_at, expires_at", async () => {
     const before = Date.now();
@@ -77,11 +89,14 @@ describeDb("POST /api/links", () => {
 
   test("does not require a JSON content-type (curl -d sends form-urlencoded)", async () => {
     const res = await app().fetch(
-      new Request("http://snip.test/api/links", {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: '{"url":"https://example.com"}',
-      }),
+      new Request(
+        "http://snip.test/api/links",
+        withKey(key, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: '{"url":"https://example.com"}',
+        }),
+      ),
     );
     expect(res.status).toBe(201);
   });
@@ -157,7 +172,7 @@ describeDb("POST /api/links", () => {
 });
 
 describeDb("GET /:slug", () => {
-  beforeEach(resetDb);
+  beforeEach(resetWithKey);
 
   async function create(url: string, options = {}): Promise<string> {
     const res = await createApp(db(), options).fetch(postUrl(url));

@@ -1,4 +1,5 @@
 import { ping, type Db } from "./db";
+import { authenticate } from "./keys";
 import { generateSlug, RESERVED_SLUGS } from "./slug";
 
 // The whole HTTP surface. Tests call `app.fetch(new Request(...))` directly,
@@ -135,17 +136,44 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
     );
   }
 
+  // D4: analytics never fail a redirect. A failed insert is logged and the
+  // 302 still goes out, so a broken recorder reads as zero clicks.
+  async function recordClick(linkId: string, slug: string): Promise<void> {
+    try {
+      await sql`insert into clicks (link_id) values (${linkId})`;
+    } catch (err) {
+      console.error(`click not recorded for /${slug}:`, err);
+    }
+  }
+
   async function followLink(slug: string): Promise<Response> {
     // Expiry is judged by the database clock, so tests can expire a link by
     // moving expires_at instead of sleeping.
-    const rows: { target_url: string; expired: boolean }[] = await sql`
-      select target_url, coalesce(expires_at <= now(), false) as expired
+    const rows: { id: string; target_url: string; expired: boolean }[] = await sql`
+      select id, target_url, coalesce(expires_at <= now(), false) as expired
       from links where slug = ${slug}`;
     const link = rows[0];
     if (!link) return notFound();
-    // Checked before anything that counts as a successful redirect (C3).
     if (link.expired) return expired();
+    // C3: one row per 302. Keep this immediately before the redirect, after
+    // every check that can refuse it.
+    await recordClick(link.id, slug);
     return new Response(null, { status: 302, headers: { Location: locationFor(link.target_url) } });
+  }
+
+  async function linkStats(slug: string): Promise<Response> {
+    const rows: { slug: string; total_clicks: number; last_clicked_at: Date | null }[] = await sql`
+      select l.slug, count(c.id)::int as total_clicks, max(c.clicked_at) as last_clicked_at
+      from links l left join clicks c on c.link_id = l.id
+      where l.slug = ${slug}
+      group by l.id`;
+    const stats = rows[0];
+    if (!stats) return notFound();
+    return json({
+      slug: stats.slug,
+      total_clicks: stats.total_clicks,
+      last_clicked_at: stats.last_clicked_at?.toISOString() ?? null,
+    });
   }
 
   return {
@@ -157,8 +185,26 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
         return json({ ok: up, db: up ? "up" : "down" }, up ? 200 : 503);
       }
 
+      // The one auth check (DESIGN D5). It guards the whole prefix, so an
+      // /api/* route added below is protected without its author opting in,
+      // and an unknown /api/* path is 401 before it can be 404.
+      if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
+        const key = await authenticate(sql, req);
+        if (!key) {
+          return Response.json(
+            { error: "unauthorized" },
+            { status: 401, headers: { "WWW-Authenticate": "Bearer" } },
+          );
+        }
+      }
+
       if (req.method === "POST" && url.pathname === "/api/links") {
         return createLink(req, url.origin);
+      }
+
+      const statsMatch = url.pathname.match(/^\/api\/links\/([^/]+)\/stats$/);
+      if (req.method === "GET" && statsMatch) {
+        return linkStats(statsMatch[1]!);
       }
 
       // Any other single path segment is a slug. /api/* has a second segment
