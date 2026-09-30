@@ -30,7 +30,11 @@ there are:
 - `GET /healthz`: database liveness
 - `POST /api/links` with `{"url": "https://..."}` → `201`
   `{"slug", "url", "short_url", "created_at"}`
-- `GET /<slug>` → `302` to the link's URL, or `404 {"error":"not_found"}`
+- `GET /<slug>` → `302` to the link's URL, or `404 {"error":"not_found"}`.
+  Every `302` is recorded as a click.
+- `GET /api/links/<slug>/stats` → `200`
+  `{"slug", "total_clicks", "last_clicked_at"}` (`last_clicked_at` is ISO-8601
+  UTC, or `null` if never followed), or `404 {"error":"not_found"}`
 
 Every `/api/*` request needs an API key; without a valid one it gets `401`
 `{"error":"unauthorized"}`. `GET /healthz` and `GET /<slug>` stay public.
@@ -43,6 +47,8 @@ curl -si -X POST localhost:$PORT_WEB/api/links -H "Authorization: Bearer $KEY" \
 # HTTP/1.1 201 Created ... {"slug":"aB3dE9x","url":"https://example.com",...}
 curl -si localhost:$PORT_WEB/aB3dE9x
 # HTTP/1.1 302 Found ... Location: https://example.com
+curl -s localhost:$PORT_WEB/api/links/aB3dE9x/stats -H "Authorization: Bearer $KEY"
+# {"slug":"aB3dE9x","total_clicks":1,"last_clicked_at":"2026-09-28T21:20:00.000Z"}
 ```
 
 ## Orchestration
