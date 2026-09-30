@@ -19,7 +19,13 @@ function post(body: unknown, authed = true): Request {
   return new Request("http://snip.test/api/links", authed ? withKey(key, init) : init);
 }
 
-type LinkBody = { slug: string; url: string; short_url: string; created_at: string };
+type LinkBody = {
+  slug: string;
+  url: string;
+  short_url: string;
+  created_at: string;
+  expires_at: string | null;
+};
 
 async function create(body: unknown, authed = true): Promise<Response> {
   return app().fetch(post(body, authed));
@@ -38,7 +44,13 @@ describeDb("POST /api/links with a custom slug", () => {
     expect(res.status).toBe(201);
 
     const body = (await res.json()) as LinkBody;
-    expect(Object.keys(body).sort()).toEqual(["created_at", "short_url", "slug", "url"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "created_at",
+      "expires_at",
+      "short_url",
+      "slug",
+      "url",
+    ]);
     expect(body.slug).toBe("my-Link_1");
     expect(body.url).toBe("https://example.com");
     expect(body.short_url).toBe("http://snip.test/my-Link_1");
