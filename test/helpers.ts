@@ -1,6 +1,7 @@
 import { describe } from "bun:test";
 import { createApp, type App } from "../src/app";
 import { connect, ping, type Db } from "../src/db";
+import { createKey } from "../src/keys";
 import { migrate } from "../src/migrate";
 
 // Database-backed suites use `describeDb`. When the database is unreachable
@@ -36,6 +37,20 @@ export function app(): App {
 
 export function request(path: string, init?: RequestInit): Request {
   return new Request(`http://snip.test${path}`, init);
+}
+
+// Creates a real API key (same code path as `bun run keys:create`) so /api/*
+// tests authenticate the way a client does. Call it after resetDb(), which
+// deletes every key.
+export async function createTestKey(name = "test"): Promise<{ id: string; key: string }> {
+  return createKey(db(), name);
+}
+
+// RequestInit with `Authorization: Bearer <key>` merged into `init.headers`.
+export function withKey(key: string, init: RequestInit = {}): RequestInit {
+  const headers = new Headers(init.headers);
+  headers.set("authorization", `Bearer ${key}`);
+  return { ...init, headers };
 }
 
 // Empties every application table. Call in beforeEach so no test depends on
