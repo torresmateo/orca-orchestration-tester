@@ -273,6 +273,69 @@ describeDb("links with no owner (created before links.api_key_id)", () => {
     const other = (await createTestKey("other")).key;
     expect(await page(other)).toEqual({ links: [], next_cursor: null });
   });
+
+  test("are 404 not_found for every key on /api/links/:slug paths (D12)", async () => {
+    const other = (await createTestKey("other")).key;
+    for (const k of [key, other]) {
+      for (const path of ["/api/links/Legacy1", "/api/links/Legacy1/stats"]) {
+        const res = await app().fetch(request(path, withKey(k)));
+        expect(res.status).toBe(404);
+        expect(await res.json()).toEqual({ error: "not_found" });
+      }
+    }
+  });
+});
+
+// D12: revoking a key blocks it everywhere under /api (D5 unchanged). Its
+// links stay stored and keep redirecting, and no other key sees them.
+describeDb("links of a revoked key", () => {
+  let revokedId: string;
+  let revoked: string;
+  let other: string;
+  let slugs: string[];
+
+  beforeEach(async () => {
+    await resetDb();
+    ({ id: revokedId, key: revoked } = await createTestKey("soon-revoked"));
+    other = (await createTestKey("other")).key;
+    slugs = await createLinks(revoked, 3, "r");
+    expect(slugsOf(await walk(revoked))).toEqual([...slugs].reverse());
+    await db()`update api_keys set revoked_at = now() where id = ${revokedId}`;
+  });
+
+  test("the revoked key gets 401 on GET /api/links, with or without a cursor", async () => {
+    const cursor = encodeURIComponent(
+      Buffer.from(JSON.stringify(["2026-01-01T00:00:00.000000Z", slugs[0]])).toString("base64url"),
+    );
+    for (const qs of ["", "?limit=1", `?cursor=${cursor}`]) {
+      const res = await list(revoked, qs);
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: "unauthorized" });
+    }
+  });
+
+  test("its links stay stored and keep redirecting", async () => {
+    const [{ n }] = await db()`
+      select count(*)::int as n from links where api_key_id = ${revokedId}`;
+    expect(n).toBe(3);
+    for (const [i, slug] of slugs.entries()) {
+      const res = await app().fetch(request(`/${slug}`));
+      expect(res.status).toBe(302);
+      expect(res.headers.get("location")).toBe(`https://example.com/r/${i}`);
+    }
+  });
+
+  test("another key never sees them: absent from its listing, 404 on per-link paths", async () => {
+    const own = await createLink(other, "https://example.com/other");
+    expect(slugsOf(await walk(other))).toEqual([own.slug]);
+    for (const slug of slugs) {
+      for (const path of [`/api/links/${slug}`, `/api/links/${slug}/stats`]) {
+        const res = await app().fetch(request(path, withKey(other)));
+        expect(res.status).toBe(404);
+        expect(await res.json()).toEqual({ error: "not_found" });
+      }
+    }
+  });
 });
 
 describeDb("the links.api_key_id migration", () => {
