@@ -148,6 +148,34 @@ describeDb("click recording", () => {
     expect(((await (await stats(slug)).json()) as Stats).total_clicks).toBe(1);
   });
 
+  test("stats with a revoked key or an empty Bearer token are 401 unauthorized", async () => {
+    const slug = await create();
+    await follow(slug);
+
+    const revoked = await createTestKey("revoked");
+    // The key works until it is revoked, so the 401 below is the revocation.
+    const beforeRevoke = await app().fetch(
+      request(`/api/links/${slug}/stats`, withKey(revoked.key)),
+    );
+    expect(beforeRevoke.status).toBe(200);
+    await db()`update api_keys set revoked_at = now() where id = ${revoked.id}`;
+
+    const revokedRes = await app().fetch(
+      request(`/api/links/${slug}/stats`, withKey(revoked.key)),
+    );
+    expect(revokedRes.status).toBe(401);
+    expect(await revokedRes.json()).toEqual({ error: "unauthorized" });
+
+    const emptyBearer = await app().fetch(
+      request(`/api/links/${slug}/stats`, { headers: { authorization: "Bearer " } }),
+    );
+    expect(emptyBearer.status).toBe(401);
+    expect(await emptyBearer.json()).toEqual({ error: "unauthorized" });
+
+    // The same link with an unrevoked key: the 401s were auth, not a missing link.
+    expect(((await (await stats(slug)).json()) as Stats).total_clicks).toBe(1);
+  });
+
   test("deleting a link deletes its clicks", async () => {
     const slug = await create();
     await follow(slug);

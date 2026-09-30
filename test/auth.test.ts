@@ -9,6 +9,8 @@ import { app, createTestKey, db, describeDb, request, resetDb, withKey } from ".
 type ApiRoute = { method: string; path: string; body?: string; okStatus: number };
 const API_ROUTES: ApiRoute[] = [
   { method: "POST", path: "/api/links", body: '{"url":"https://example.com"}', okStatus: 201 },
+  // No link exists in this suite, so a valid caller gets not_found.
+  { method: "GET", path: "/api/links/abc1234/stats", okStatus: 404 },
   { method: "GET", path: "/api/nope", okStatus: 404 },
   { method: "POST", path: "/api/nope", okStatus: 404 },
   { method: "GET", path: "/api", okStatus: 404 },
