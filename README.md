@@ -29,7 +29,9 @@ there are:
 
 - `GET /healthz`: database liveness
 - `POST /api/links` with `{"url": "https://..."}` → `201`
-  `{"slug", "url", "short_url", "created_at"}`
+  `{"slug", "url", "short_url", "created_at"}`. Add `"slug": "my-link"` to
+  choose the slug yourself (3-32 of `A-Z a-z 0-9 _ -`, case-sensitive, not
+  `api` or `healthz`); a slug that is already taken → `409 {"error":"slug_taken"}`
 - `GET /api/links` → `200 {"links":[...],"next_cursor": string|null}`: the
   calling key's links, newest first, each shaped like the `POST` response.
   `?limit=` 1-100 (default 20); pass `?cursor=<next_cursor>` for the next

@@ -262,6 +262,22 @@ describeDb("ownership between keys (D7)", () => {
     expect(theirs.headers.get("content-type")).toBe(unknown.headers.get("content-type"));
   });
 
+  test("a custom-slug link belongs to its creator like a generated one", async () => {
+    const res = await app().fetch(
+      request(
+        "/api/links",
+        withKey(a, { method: "POST", body: JSON.stringify({ url: "https://example.com/c", slug: "mine-A" }) }),
+      ),
+    );
+    expect(res.status).toBe(201);
+    expect(slugsOf(await walk(a))).toEqual(["mine-A"]);
+    expect(await page(b)).toEqual({ links: [], next_cursor: null });
+    expect((await app().fetch(request("/api/links/mine-A/stats", withKey(a)))).status).toBe(200);
+    const theirs = await app().fetch(request("/api/links/mine-A/stats", withKey(b)));
+    expect(theirs.status).toBe(404);
+    expect(await theirs.json()).toEqual({ error: "not_found" });
+  });
+
   test("GET /<slug> redirects publicly whoever owns the link", async () => {
     const aLink = await createLink(a, "https://example.com/a");
     const bLink = await createLink(b, "https://example.com/b");
