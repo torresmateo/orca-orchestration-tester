@@ -177,12 +177,52 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
     return json({ links: page.map((link) => linkJson(link, url.origin)), next_cursor: nextCursor });
   }
 
+  // D4: analytics never fail a redirect. A failed insert is logged and the
+  // 302 still goes out, so a broken recorder reads as zero clicks.
+  async function recordClick(linkId: string, slug: string): Promise<void> {
+    try {
+      await sql`insert into clicks (link_id) values (${linkId})`;
+    } catch (err) {
+      console.error(`click not recorded for /${slug}:`, err);
+    }
+  }
+
   async function followLink(slug: string): Promise<Response> {
-    const rows: Pick<LinkRow, "target_url">[] = await sql`
-      select target_url from links where slug = ${slug}`;
+    const rows: { id: string; target_url: string }[] = await sql`
+      select id, target_url from links where slug = ${slug}`;
     const link = rows[0];
     if (!link) return notFound();
+    // C3: one row per 302. Keep this immediately before the redirect, after
+    // every check that can refuse it.
+    await recordClick(link.id, slug);
     return new Response(null, { status: 302, headers: { Location: locationFor(link.target_url) } });
+  }
+
+  // The one ownership lookup for every per-link /api route: the link's id
+  // if `key` owns it, otherwise null. Another key's link, an unknown slug and
+  // a link with no owner (api_key_id null, D12) all look the same, so the
+  // caller answers 404 not_found and never 403 (D7).
+  async function ownedLinkId(slug: string, key: ApiKey): Promise<string | null> {
+    const rows: { id: string }[] = await sql`
+      select id from links where slug = ${slug} and api_key_id = ${key.id}`;
+    return rows[0]?.id ?? null;
+  }
+
+  async function linkStats(slug: string, key: ApiKey): Promise<Response> {
+    const linkId = await ownedLinkId(slug, key);
+    if (linkId === null) return notFound();
+    const rows: { slug: string; total_clicks: number; last_clicked_at: Date | null }[] = await sql`
+      select l.slug, count(c.id)::int as total_clicks, max(c.clicked_at) as last_clicked_at
+      from links l left join clicks c on c.link_id = l.id
+      where l.id = ${linkId}
+      group by l.id`;
+    const stats = rows[0];
+    if (!stats) return notFound();
+    return json({
+      slug: stats.slug,
+      total_clicks: stats.total_clicks,
+      last_clicked_at: stats.last_clicked_at?.toISOString() ?? null,
+    });
   }
 
   // Every /api/* route, reached only with an authenticated key. Anything a
@@ -193,6 +233,8 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
       if (req.method === "POST") return createLink(req, url.origin, key);
       if (req.method === "GET") return listLinks(url, key);
     }
+    const statsMatch = url.pathname.match(/^\/api\/links\/([^/]+)\/stats$/);
+    if (req.method === "GET" && statsMatch) return linkStats(statsMatch[1]!, key);
     return notFound();
   }
 

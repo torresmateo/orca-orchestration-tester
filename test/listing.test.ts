@@ -224,14 +224,42 @@ describeDb("ownership between keys (D7)", () => {
   });
 
   test("B gets 404 not_found, never 403, on /api/links/:slug paths for A's link", async () => {
-    // No per-link /api route exists on main yet; this pins the status for
-    // the paths such routes will use (#3 adds /stats).
     const { slug } = await createLink(a, "https://example.com");
+    // Clicks first, so a 404 can only come from the owner check, not a
+    // missing link or an empty stats row.
+    for (let i = 0; i < 2; i++) expect((await app().fetch(request(`/${slug}`))).status).toBe(302);
     for (const path of [`/api/links/${slug}`, `/api/links/${slug}/stats`]) {
       const res = await app().fetch(request(path, withKey(b)));
       expect(res.status).toBe(404);
       expect(await res.json()).toEqual({ error: "not_found" });
     }
+  });
+
+  test("A's stats for A's link are 200, and B's for B's link", async () => {
+    const aLink = await createLink(a, "https://example.com/a");
+    const bLink = await createLink(b, "https://example.com/b");
+    for (let i = 0; i < 3; i++) await app().fetch(request(`/${aLink.slug}`));
+    await app().fetch(request(`/${bLink.slug}`));
+
+    for (const [k, slug, clicks] of [
+      [a, aLink.slug, 3],
+      [b, bLink.slug, 1],
+    ] as const) {
+      const res = await app().fetch(request(`/api/links/${slug}/stats`, withKey(k)));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { slug: string; total_clicks: number };
+      expect(body.slug).toBe(slug);
+      expect(body.total_clicks).toBe(clicks);
+    }
+  });
+
+  test("B asking for A's stats looks exactly like asking for a slug that does not exist", async () => {
+    const { slug } = await createLink(a, "https://example.com");
+    const theirs = await app().fetch(request(`/api/links/${slug}/stats`, withKey(b)));
+    const unknown = await app().fetch(request("/api/links/Nope123/stats", withKey(b)));
+    expect(theirs.status).toBe(unknown.status);
+    expect(await theirs.text()).toBe(await unknown.text());
+    expect(theirs.headers.get("content-type")).toBe(unknown.headers.get("content-type"));
   });
 
   test("GET /<slug> redirects publicly whoever owns the link", async () => {
@@ -276,6 +304,8 @@ describeDb("links with no owner (created before links.api_key_id)", () => {
 
   test("are 404 not_found for every key on /api/links/:slug paths (D12)", async () => {
     const other = (await createTestKey("other")).key;
+    // Followed first, so the stats 404 is not an empty-link artefact.
+    expect((await app().fetch(request("/Legacy1"))).status).toBe(302);
     for (const k of [key, other]) {
       for (const path of ["/api/links/Legacy1", "/api/links/Legacy1/stats"]) {
         const res = await app().fetch(request(path, withKey(k)));
