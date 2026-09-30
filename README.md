@@ -35,6 +35,9 @@ there are:
 - `GET /api/links/<slug>/stats` → `200`
   `{"slug", "total_clicks", "last_clicked_at"}` (`last_clicked_at` is ISO-8601
   UTC, or `null` if never followed), or `404 {"error":"not_found"}`
+- `GET /api/links/<slug>/stats?by=day` → the same fields plus `days`: one
+  `{"date":"YYYY-MM-DD","clicks":n}` per UTC day from the link's creation day
+  to today, oldest first, with `0` for days without clicks
 
 Every `/api/*` request needs an API key; without a valid one it gets `401`
 `{"error":"unauthorized"}`. `GET /healthz` and `GET /<slug>` stay public.
