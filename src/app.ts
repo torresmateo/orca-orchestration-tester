@@ -134,12 +134,40 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
     );
   }
 
+  // D4: analytics never fail a redirect. A failed insert is logged and the
+  // 302 still goes out, so a broken recorder reads as zero clicks.
+  async function recordClick(linkId: string, slug: string): Promise<void> {
+    try {
+      await sql`insert into clicks (link_id) values (${linkId})`;
+    } catch (err) {
+      console.error(`click not recorded for /${slug}:`, err);
+    }
+  }
+
   async function followLink(slug: string): Promise<Response> {
-    const rows: Pick<LinkRow, "target_url">[] = await sql`
-      select target_url from links where slug = ${slug}`;
+    const rows: { id: string; target_url: string }[] = await sql`
+      select id, target_url from links where slug = ${slug}`;
     const link = rows[0];
     if (!link) return notFound();
+    // C3: one row per 302. Keep this immediately before the redirect, after
+    // every check that can refuse it.
+    await recordClick(link.id, slug);
     return new Response(null, { status: 302, headers: { Location: locationFor(link.target_url) } });
+  }
+
+  async function linkStats(slug: string): Promise<Response> {
+    const rows: { slug: string; total_clicks: number; last_clicked_at: Date | null }[] = await sql`
+      select l.slug, count(c.id)::int as total_clicks, max(c.clicked_at) as last_clicked_at
+      from links l left join clicks c on c.link_id = l.id
+      where l.slug = ${slug}
+      group by l.id`;
+    const stats = rows[0];
+    if (!stats) return notFound();
+    return json({
+      slug: stats.slug,
+      total_clicks: stats.total_clicks,
+      last_clicked_at: stats.last_clicked_at?.toISOString() ?? null,
+    });
   }
 
   return {
@@ -166,6 +194,11 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
 
       if (req.method === "POST" && url.pathname === "/api/links") {
         return createLink(req, url.origin);
+      }
+
+      const statsMatch = url.pathname.match(/^\/api\/links\/([^/]+)\/stats$/);
+      if (req.method === "GET" && statsMatch) {
+        return linkStats(statsMatch[1]!);
       }
 
       // Any other single path segment is a slug. /api/* has a second segment
