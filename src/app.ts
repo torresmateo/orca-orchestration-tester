@@ -1,3 +1,4 @@
+import { SQL } from "bun";
 import { ping, type Db } from "./db";
 import { authenticate } from "./keys";
 import { generateSlug, RESERVED_SLUGS } from "./slug";
@@ -33,6 +34,29 @@ function notFound(): Response {
 
 function expired(): Response {
   return json({ error: "expired" }, 410);
+}
+
+function slugTaken(): Response {
+  return json({ error: "slug_taken" }, 409);
+}
+
+// Custom slugs (D2): 3-32 of [A-Za-z0-9_-], never a reserved word. Validated,
+// never trimmed or case-folded: the stored slug is exactly what was sent.
+// `undefined` means generate one; an explicit null counts as absent (D10).
+const CUSTOM_SLUG = /^[A-Za-z0-9_-]{3,32}$/;
+
+function parseCustomSlug(value: unknown): string | undefined | null {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !CUSTOM_SLUG.test(value) || RESERVED_SLUGS.has(value)) {
+    return null;
+  }
+  return value;
+}
+
+function isSlugConflict(err: unknown): boolean {
+  return (
+    err instanceof SQL.PostgresError && err.errno === "23505" && err.constraint === "links_slug_key"
+  );
 }
 
 // An absolute http(s) URL with an authority. The string is stored exactly as
@@ -106,6 +130,25 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
     throw new Error(`no free slug after ${MAX_SLUG_ATTEMPTS} attempts`);
   }
 
+  // Uniqueness is the database's job: the unique constraint on links.slug
+  // decides races, so there is no pre-check. Returns null if the slug is taken.
+  async function insertCustomLink(
+    slug: string,
+    targetUrl: string,
+    expiresAt: Date | null,
+  ): Promise<LinkRow | null> {
+    try {
+      const rows: LinkRow[] = await sql`
+        insert into links (slug, target_url, expires_at)
+        values (${slug}, ${targetUrl}, ${expiresAt})
+        returning slug, target_url, created_at, expires_at`;
+      return rows[0]!;
+    } catch (err) {
+      if (isSlugConflict(err)) return null;
+      throw err;
+    }
+  }
+
   async function createLink(req: Request, origin: string): Promise<Response> {
     let body: unknown;
     try {
@@ -117,13 +160,19 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
 
     const targetUrl = parseTargetUrl((body as Record<string, unknown>).url);
     if (targetUrl === null) return invalidRequest();
+    const customSlug = parseCustomSlug((body as Record<string, unknown>).slug);
+    if (customSlug === null) return invalidRequest();
 
     const expiresAt = parseExpiresAt((body as Record<string, unknown>).expires_at);
     if (expiresAt === "invalid") return invalidRequest();
     // A link that is already expired could never be followed.
     if (expiresAt !== null && expiresAt.getTime() <= Date.now()) return invalidRequest();
 
-    const link = await insertLink(targetUrl, expiresAt);
+    const link =
+      customSlug === undefined
+        ? await insertLink(targetUrl, expiresAt)
+        : await insertCustomLink(customSlug, targetUrl, expiresAt);
+    if (link === null) return slugTaken();
     return json(
       {
         slug: link.slug,

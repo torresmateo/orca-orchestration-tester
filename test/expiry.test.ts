@@ -149,6 +149,20 @@ describeDb("POST /api/links with expires_at", () => {
     });
   }
 
+  test("a custom slug keeps its expires_at, and an invalid expires_at stores no custom link", async () => {
+    const body = await create({ slug: "my-Expiring_1", expires_at: "2099-06-01T09:30:00+02:00" });
+    expect(body.slug).toBe("my-Expiring_1");
+    expect(body.expires_at).toBe("2099-06-01T07:30:00.000Z");
+    expect((await storedExpiry("my-Expiring_1"))?.toISOString()).toBe("2099-06-01T07:30:00.000Z");
+
+    const res = await app().fetch(
+      post({ url: "https://example.com", slug: "my-Rejected", expires_at: "2099-01-01" }),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_request" });
+    expect(await linkCount()).toBe(1);
+  });
+
   test("a bad url is still rejected when expires_at is valid", async () => {
     const res = await app().fetch(post({ url: "ftp://x", expires_at: "2099-01-01T00:00:00Z" }));
     expect(res.status).toBe(400);
@@ -186,6 +200,18 @@ describeDb("GET /:slug with expiry", () => {
 
     await db()`update links set expires_at = now() - interval '1 hour' where slug = ${slug}`;
     expect((await app().fetch(request(`/${slug}`))).status).toBe(410);
+  });
+
+  test("an expired custom slug answers 410 and records no click", async () => {
+    const { slug } = await create({ slug: "my-Expiring_1", expires_at: "2099-01-01T00:00:00Z" });
+    expect((await app().fetch(request("/my-Expiring_1"))).status).toBe(302);
+
+    await db()`update links set expires_at = now() - interval '1 second' where slug = ${slug}`;
+
+    const res = await app().fetch(request("/my-Expiring_1"));
+    expect(res.status).toBe(410);
+    expect(await res.json()).toEqual({ error: "expired" });
+    expect(await clickCount()).toBe(1);
   });
 
   test("expiring one link leaves the others alone", async () => {

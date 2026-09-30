@@ -29,10 +29,12 @@ there are:
 
 - `GET /healthz`: database liveness
 - `POST /api/links` with `{"url": "https://..."}` → `201`
-  `{"slug", "url", "short_url", "created_at", "expires_at"}`. Optional
-  `"expires_at"` is an ISO-8601 date-time with an offset, e.g.
-  `"2030-01-01T00:00:00Z"`, and must be in the future. It is echoed in UTC, or
-  `null` for a link that never expires.
+  `{"slug", "url", "short_url", "created_at", "expires_at"}`. Add
+  `"slug": "my-link"` to choose the slug yourself (3-32 of `A-Z a-z 0-9 _ -`,
+  case-sensitive, not `api` or `healthz`); a slug that is already taken →
+  `409 {"error":"slug_taken"}`. Optional `"expires_at"` is an ISO-8601
+  date-time with an offset, e.g. `"2030-01-01T00:00:00Z"`, and must be in the
+  future. It is echoed in UTC, or `null` for a link that never expires.
 - `GET /<slug>` → `302` to the link's URL, `404 {"error":"not_found"}`, or
   `410 {"error":"expired"}` once its `expires_at` has passed. Every `302` is
   recorded as a click; a `404` or `410` records nothing.
