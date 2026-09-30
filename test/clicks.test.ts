@@ -149,10 +149,19 @@ describeDb("click recording", () => {
   });
 
   test("stats with a revoked key or an empty Bearer token are 401 unauthorized", async () => {
-    const slug = await create();
+    // The link belongs to the key that will be revoked: stats are owner-only
+    // (D7), and the owner is the one caller whose 200 can turn into a 401.
+    const revoked = await createTestKey("revoked");
+    const created = await app().fetch(
+      request(
+        "/api/links",
+        withKey(revoked.key, { method: "POST", body: JSON.stringify({ url: "https://example.com" }) }),
+      ),
+    );
+    expect(created.status).toBe(201);
+    const { slug } = (await created.json()) as { slug: string };
     await follow(slug);
 
-    const revoked = await createTestKey("revoked");
     // The key works until it is revoked, so the 401 below is the revocation.
     const beforeRevoke = await app().fetch(
       request(`/api/links/${slug}/stats`, withKey(revoked.key)),
@@ -172,8 +181,12 @@ describeDb("click recording", () => {
     expect(emptyBearer.status).toBe(401);
     expect(await emptyBearer.json()).toEqual({ error: "unauthorized" });
 
-    // The same link with an unrevoked key: the 401s were auth, not a missing link.
-    expect(((await (await stats(slug)).json()) as Stats).total_clicks).toBe(1);
+    // The link and its click are still there, so the 401s were auth, not a
+    // missing link. No live key owns it any more, so none can read its stats.
+    const [row] = await db()`
+      select count(c.id)::int as n from links l join clicks c on c.link_id = l.id
+      where l.slug = ${slug}`;
+    expect(row.n).toBe(1);
   });
 
   test("deleting a link deletes its clicks", async () => {
