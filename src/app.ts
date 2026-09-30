@@ -126,6 +126,52 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
     });
   }
 
+  // ?by=day: the #3 fields plus one entry per UTC day (D8) from the link's
+  // creation day to today, zero-filled. Every day is computed from an explicit
+  // `at time zone 'UTC'`, never the session time zone, and dates leave the
+  // database as text so neither DateStyle nor a JS Date can shift them. One
+  // statement, so days and total_clicks come from the same snapshot.
+  async function linkDailyStats(slug: string): Promise<Response> {
+    const rows: {
+      slug: string;
+      total_clicks: number;
+      last_clicked_at: Date | null;
+      days: { date: string; clicks: number }[];
+    }[] = await sql`
+      with link as (
+        select id, slug, (created_at at time zone 'UTC')::date as first_day
+        from links where slug = ${slug}
+      ),
+      link_clicks as (
+        select c.clicked_at, (c.clicked_at at time zone 'UTC')::date as day
+        from clicks c join link on c.link_id = link.id
+      ),
+      per_day as (
+        select day, count(*)::int as clicks from link_clicks group by day
+      ),
+      days as (
+        select link.first_day + n as day
+        from link, generate_series(0, (now() at time zone 'UTC')::date - link.first_day) as n
+      )
+      select link.slug,
+        (select count(*)::int from link_clicks) as total_clicks,
+        (select max(clicked_at) from link_clicks) as last_clicked_at,
+        (select coalesce(json_agg(json_build_object(
+            'date', to_char(d.day, 'YYYY-MM-DD'),
+            'clicks', coalesce(p.clicks, 0)
+          ) order by d.day), '[]'::json)
+         from days d left join per_day p on p.day = d.day) as days
+      from link`;
+    const stats = rows[0];
+    if (!stats) return notFound();
+    return json({
+      slug: stats.slug,
+      total_clicks: stats.total_clicks,
+      last_clicked_at: stats.last_clicked_at?.toISOString() ?? null,
+      days: stats.days,
+    });
+  }
+
   return {
     async fetch(req) {
       const url = new URL(req.url);
@@ -154,7 +200,10 @@ export function createApp(sql: Db, options: AppOptions = {}): App {
 
       const statsMatch = url.pathname.match(/^\/api\/links\/([^/]+)\/stats$/);
       if (req.method === "GET" && statsMatch) {
-        return linkStats(statsMatch[1]!);
+        const by = url.searchParams.get("by");
+        if (by === null) return linkStats(statsMatch[1]!);
+        if (by === "day") return linkDailyStats(statsMatch[1]!);
+        return invalidRequest();
       }
 
       // Any other single path segment is a slug. /api/* has a second segment
